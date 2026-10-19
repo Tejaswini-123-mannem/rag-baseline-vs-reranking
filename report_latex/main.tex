@@ -1,0 +1,126 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=0.8in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype,booktabs,tabularx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\setlist[itemize]{nosep,leftmargin=*}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\newcommand{\answer}[1]{\begin{quote}\small #1\end{quote}}
+\title{\vspace{-2em}RAG Assignment: Baseline Retrieval vs.\ Cross-Encoder Re-Ranking}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+\vspace{-2.5em}
+
+\section{Setup and architecture}
+This experiment compares two RAG pipelines on the official \emph{CATAN: Cities \& Knights Game Rules \& Almanac}. Its general rules, exceptions, restrictions, and optional variants provide retrieval stress tests. The PDF was divided into 118 chunks of up to 160 words with 40-word overlap. Each chunk retained an ID and PDF page number.
+
+The models were:
+\begin{itemize}
+\item Embeddings: \texttt{sentence-transformers/all-MiniLM-L6-v2}.
+\item Re-ranker: \texttt{cross-encoder/ms-marco-MiniLM-L-6-v2}.
+\item Generator: \texttt{google/flan-t5-base}.
+\end{itemize}
+
+A \textbf{bi-encoder} embeds queries and passages independently, so passage vectors can be computed once and reused. Normalized embeddings were stored in a NumPy matrix; their dot product equals cosine similarity. Exact vector search retrieved ten candidates, and the baseline passed the first three to the generator.
+
+A \textbf{cross-encoder} processes each query and passage together. Joint self-attention lets their tokens interact before a relevance score is produced. The advanced pipeline scored the same ten candidates, sorted them, and passed the best three to the generator. These query-dependent scores must be recomputed for each new question.
+
+Both pipelines used the same corpus, initial candidates, prompt structure, generator, deterministic decoding, and output limit of 96 new tokens. Only selected context and its order changed.
+
+\section{Qualitative analysis and rank shifts}
+Seventeen queries were evaluated for retrieval. Paired answers were generated for two verified recoveries and one regression diagnostic. The remaining fourteen were retrieval-only tests. The recoveries were selected after inspecting results and checking source pages; they are examples, not an overall accuracy estimate.
+
+\subsection{Case 1: Missing discard destination}
+\textbf{Question:} If I have four progress cards and draw a fifth outside my turn, where must the discarded card go?
+
+\textbf{Correct rule:} Page 9 requires discarding a card of the player's choice to the bottom of the appropriate stack.
+
+\textbf{Rank shift:} \texttt{p09\_0360} moved from rank \textbf{10 to 1}.
+
+This is a chunk-boundary omission. The baseline's top passage, \texttt{p09\_0240}, includes the requirement to discard but ends before its destination. The other selected passages discuss turn order and progress-card acquisition. Re-ranking promoted the continuation containing the missing detail.
+
+\textbf{Baseline answer (actual):}
+\answer{[p05\_0000; page 5] 55 turn o vervie W The player who placed the last city takes the first turn; afterwards, in clockwise direction, one by one the other players take their turns. On your turn, the following actions are performed, in the order listed: \textbullet\ Y ou may never hold more than four progress cards in your hand. If you draw a fifth progress card, and you cannot play it because it is not your turn}
+
+\textbf{Re-ranked answer (actual):}
+\answer{To the bottom of the appropriate stack.}
+
+The baseline copied unrelated information and omitted the destination. The re-ranked answer supplied it directly. This is a repaired omission, not a demonstrated hallucination. The unfinished baseline output also illustrates generator and output-length limitations.
+
+\subsection{Case 2: Buying improvements without a city}
+\textbf{Question:} Can I buy city improvements if I no longer have any cities?
+
+\textbf{Correct rule:} Under \emph{Losing Your Last City} on page 12, existing improvements remain, but additional improvements cannot be purchased until the player owns a city again.
+
+\textbf{Rank shift:} \texttt{p12\_0000} moved from rank \textbf{10 to 1}.
+
+This is an exception and constraint failure. The baseline selected ordinary improvement rules and a metropolis-related restriction. They share the query's terminology but do not explicitly resolve the zero-city condition. The advanced context included the specific restriction.
+
+\textbf{Baseline answer (actual):}
+\answer{You may not purchase any improvements beyond the third level of a given color unless you have a city where you could build a metropolis. If you do not have such a city on the board, you must wait until you have built at least one more city.}
+
+\textbf{Re-ranked answer (actual):}
+\answer{Once you own a city again, you may continue to purchase city improvements normally.}
+
+The baseline describes a restriction above level three, leaving lower-level purchases with zero cities unresolved. The re-ranked answer addresses when purchases resume. It is still terse: explicitly saying that purchases are prohibited until a city is owned again would be clearer, and the answer omits a citation.
+
+\subsection{Regression diagnostic}
+For the same-turn knight activation and robber question, re-ranking promoted \texttt{p13\_0480}, an optional pre-roll variant, from rank 8 to rank 1. This concerns a different timing issue from the ordinary activation restriction on page 6. Both generated answers describe chasing away the robber without clearly resolving the activation constraint. This is a retrieval regression diagnostic, not an answer repair: re-ranking can prioritize related optional rules and miss the requested condition.
+
+\section{Latency profiling}
+The run used Windows 11 and Python 3.12.5. Generation used the CPU, with four PyTorch CPU threads configured. The exact CPU model was not recorded. Models were warmed before five timing repetitions per query. The following medians use the current saved \texttt{experiment.json}.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}Xrrr@{}}
+\toprule
+Query & Baseline ms & Re-ranking ms & Advanced ms\\
+\midrule
+Discard destination & 37.54 & 640.39 & 694.73\\
+No cities remaining & 16.41 & 462.97 & 483.05\\
+Knight activation & 18.65 & 468.96 & 487.97\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Baseline timing includes query embedding and exact vector search. Advanced timing adds cross-encoder scoring and sorting. Model loading, PDF extraction, indexing, and generation are excluded. Component medians need not sum exactly to the median total. Saved metadata records approximately 6.27 seconds for initial passage embedding and index construction.
+
+Advanced retrieval was approximately \textbf{18.5 times} and \textbf{29.4 times} slower for the two recovery cases, respectively, using unrounded values. The additional cost recovered missing evidence in these examples; it does not guarantee improvement for every query.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}Xrr@{}}
+\toprule
+Query & Baseline generation ms & Re-ranked generation ms\\
+\midrule
+Discard destination & 17,925.04 & 3,096.63\\
+No cities remaining & 16,142.32 & 4,717.03\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Generation times are single observations, not five-run medians. The re-ranked answers were much shorter, which likely contributed to their lower generation times. These values do not establish that re-ranking generally makes the complete system faster.
+
+\section{Why not cross-encode the entire collection?}
+A cross-encoder must jointly process each query with every candidate passage. For $N$ passages, scoring everything requires processing $N$ query--passage pairs per question, even with batching. Independent dense passage embeddings can instead be reused.
+
+Two-stage retrieval limits expensive scoring to ten pairs. Here this means 10 instead of 118 pairs: $118/10=11.8$ times fewer pairs, \emph{not} a measured $11.8\times$ speedup. The cost advantage becomes more important for larger collections, where dense retrieval can also use approximate nearest-neighbor indexes.
+
+The trade-off is candidate recall: re-ranking cannot recover a passage missing from the initial ten. First-stage retrieval must supply a useful candidate set.
+
+\section{Limitations and reproducibility}
+One rulebook and selected stress tests do not establish general accuracy. Fixed word windows can split clauses, overlap can duplicate evidence, and PDF extraction introduces artifacts. The small generator can copy irrelevant information, omit citations, or produce incomplete answers; the 96-token output cap can truncate responses. Rank promotion alone does not prove relevance. Re-ranking can favor optional variants, and timings depend on hardware and execution conditions.
+
+Implementation is in \texttt{RAG\_Baseline\_vs\_Reranking.ipynb} and \texttt{experiment.py}. Raw rankings, prompts, answers, and timings are in \texttt{results/experiment.json}. Configuration is in \texttt{results/metadata.json}, and package versions are in \texttt{requirements-lock.txt}. These tables use the current raw results rather than earlier lab-note timings.
+
+\textbf{Source:}
+\href{https://www.catan.com/sites/default/files/2021-06/catan_c_k_2020_rule_book_200708.pdf}{Official CATAN: Cities \& Knights Game Rules \& Almanac}, especially pages 9 and 12.
+
+% Add your actual GitHub URL before submission if desired:
+% \textbf{Repository:} \url{https://github.com/YOUR-USERNAME/YOUR-REPOSITORY}
+
+\end{document}

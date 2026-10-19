@@ -1,0 +1,15 @@
+{
+  "pdf_sha256": "ae335149a56b60418b5561cf9f45dea07cdd00be01362a1e51802f7bf2f024ac",
+  "source": "https://www.catan.com/sites/default/files/2021-06/catan_c_k_2020_rule_book_200708.pdf",
+  "python": "3.12.5",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "chunk_count": 118,
+  "chunk_words": 160,
+  "overlap_words": 40,
+  "generator": "google/flan-t5-base",
+  "max_new_tokens": 96,
+  "index_seconds": 6.265659499971662,
+  "seed": 42,
+  "timing_repeats": 5,
+  "timing": "Warm models; query embedding + exact vector search; advanced adds cross-encoder. Generation separate."
+}
